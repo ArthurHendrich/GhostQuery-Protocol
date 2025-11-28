@@ -1,0 +1,76 @@
+[package]
+name = "ghost-query"
+version = "0.1.0"
+edition = "2021"
+authors = ["GhostQuery Team"]
+description = "An Asymmetric DNS Exfiltration Protocol Inspired by ADSM"
+license = "MIT"
+
+[lib]
+name = "ghost_query"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gq-implant"
+path = "src/bin/implant.rs"
+
+[[bin]]
+name = "gq-controller"
+path = "src/bin/controller.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# DNS handling
+trust-dns-resolver = "0.23"
+trust-dns-server = "0.23"
+trust-dns-proto = "0.23"
+
+# Cryptography
+aes-gcm = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+bytes = "1.5"
+hex = "0.4"
+base32 = "0.4"
+parking_lot = "0.12"
+async-trait = "0.1"
+futures = "0.3"
+
+# Raw sockets for ICMP
+socket2 = "0.5"
+pnet = "0.34"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.9"
+
+[features]
+default = []
+full-stealth = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
