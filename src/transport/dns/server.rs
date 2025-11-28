@@ -6,6 +6,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use tokio::net::UdpSocket;
+use trust_dns_proto::op::{Header, Message, MessageType, OpCode, ResponseCode};
+use trust_dns_proto::rr::rdata::A;
+use trust_dns_proto::rr::{Name, RData, Record, RecordType};
+use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
 
 use crate::common::constants::{DEFAULT_TTL, DNS_SERVER_PORT};
 use crate::common::error::{GhostQueryError, Result};
@@ -67,32 +71,32 @@ impl DnsServer {
         &self,
         handler: Arc<H>,
     ) -> Result<()> {
-        let socket = UdpSocket::bind(self.config.bind_addr)
-            .await
-            .map_err(|e| GhostQueryError::InternalError(format!("Failed to bind: {}", e)))?;
+        let socket = Arc::new(
+            UdpSocket::bind(self.config.bind_addr)
+                .await
+                .map_err(|e| GhostQueryError::InternalError(format!("Failed to bind: {}", e)))?,
+        );
 
         *self.running.write() = true;
 
         tracing::info!("DNS server started on {}", self.config.bind_addr);
 
-        let mut buf = [0u8; 512]; // Standard DNS UDP size
+        let mut buf = [0u8; 512];
 
         while *self.running.read() {
             match socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     let data = buf[..len].to_vec();
-                    let socket_clone = socket.local_addr().ok();
+                    let socket_clone = Arc::clone(&socket);
                     let handler_clone = Arc::clone(&handler);
                     let domain = self.config.domain.clone();
+                    let ttl = self.config.default_ttl;
 
-                    // Handle in a separate task
                     tokio::spawn(async move {
-                        if let Some(_local) = socket_clone {
-                            if let Err(e) =
-                                Self::handle_packet(&data, addr, &domain, handler_clone).await
-                            {
-                                tracing::warn!("Error handling DNS packet: {}", e);
-                            }
+                        if let Err(e) =
+                            Self::handle_packet(&data, addr, &domain, ttl, handler_clone, socket_clone).await
+                        {
+                            tracing::warn!("Error handling DNS packet: {}", e);
                         }
                     });
                 }
@@ -112,18 +116,123 @@ impl DnsServer {
 
     /// Handle a DNS packet
     async fn handle_packet<H: QueryHandler>(
-        _data: &[u8],
-        _addr: SocketAddr,
-        _domain: &str,
-        _handler: Arc<H>,
+        data: &[u8],
+        addr: SocketAddr,
+        domain: &str,
+        ttl: u32,
+        handler: Arc<H>,
+        socket: Arc<UdpSocket>,
     ) -> Result<()> {
-        // This is a simplified implementation
-        // A full implementation would parse the DNS packet, extract the query,
-        // call the handler, and send back a proper DNS response
+        // Parse incoming DNS message
+        let request = Message::from_bytes(data)
+            .map_err(|e| GhostQueryError::DnsParseError(e.to_string()))?;
 
-        // For now, we'll use this as a placeholder
-        // The actual DNS parsing would use trust-dns-proto
+        let request_id = request.id();
+        
+        // Get the query
+        let query = request.queries().first().ok_or_else(|| {
+            GhostQueryError::DnsParseError("No query in request".to_string())
+        })?;
 
+        let qname_raw = query.name().to_string();
+        // Remove trailing dot if present (DNS FQDN format)
+        let qname = qname_raw.trim_end_matches('.');
+        tracing::debug!("Received query for: {} (raw: {})", qname, qname_raw);
+
+        // Parse the query
+        let parsed = match ParsedQuery::parse(qname, domain) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to parse query {}: {}", qname, e);
+                // Send NXDOMAIN for unparseable queries
+                let response = Self::build_nxdomain_response(request_id, &qname);
+                Self::send_response(&socket, addr, &response).await?;
+                return Ok(());
+            }
+        };
+
+        // Handle the query
+        let dns_response = if parsed.is_init {
+            tracing::info!("Session init: {}", parsed.session_id);
+            handler.handle_init(parsed.session_id, &parsed.payload).await
+        } else if parsed.is_done {
+            tracing::info!("Session done: {}", parsed.session_id);
+            handler.handle_done(parsed.session_id).await
+        } else {
+            tracing::debug!("Chunk {}: session {}", parsed.sequence, parsed.session_id);
+            handler.handle_query(&parsed).await
+        };
+
+        // Build DNS response
+        let response_bytes = Self::build_response(request_id, &qname, &dns_response, ttl)?;
+        
+        // Send response
+        Self::send_response(&socket, addr, &response_bytes).await?;
+
+        Ok(())
+    }
+
+    /// Build a DNS response message
+    fn build_response(
+        request_id: u16,
+        qname: &str,
+        dns_response: &DnsResponse,
+        ttl: u32,
+    ) -> Result<Vec<u8>> {
+        let mut message = Message::new();
+        
+        // Set header
+        let mut header = Header::new();
+        header.set_id(request_id);
+        header.set_message_type(MessageType::Response);
+        header.set_op_code(OpCode::Query);
+        header.set_authoritative(true);
+        header.set_response_code(ResponseCode::NoError);
+        message.set_header(header);
+
+        // Add query section
+        let name = Name::from_ascii(qname)
+            .map_err(|e| GhostQueryError::DnsParseError(e.to_string()))?;
+
+        // Add answer with command IP
+        if let Some(ip) = dns_response.a_record {
+            let mut record = Record::new();
+            record.set_name(name);
+            record.set_record_type(RecordType::A);
+            record.set_ttl(ttl);
+            record.set_data(Some(RData::A(A(ip))));
+            message.add_answer(record);
+        }
+
+        message.to_bytes()
+            .map_err(|e| GhostQueryError::DnsParseError(e.to_string()))
+    }
+
+    /// Build NXDOMAIN response
+    fn build_nxdomain_response(request_id: u16, _qname: &str) -> Vec<u8> {
+        let mut message = Message::new();
+        
+        let mut header = Header::new();
+        header.set_id(request_id);
+        header.set_message_type(MessageType::Response);
+        header.set_op_code(OpCode::Query);
+        header.set_authoritative(true);
+        header.set_response_code(ResponseCode::NXDomain);
+        message.set_header(header);
+
+        message.to_bytes().unwrap_or_default()
+    }
+
+    /// Send response to client
+    async fn send_response(
+        socket: &UdpSocket,
+        addr: SocketAddr,
+        data: &[u8],
+    ) -> Result<()> {
+        socket
+            .send_to(data, addr)
+            .await
+            .map_err(|e| GhostQueryError::InternalError(format!("Failed to send: {}", e)))?;
         Ok(())
     }
 
@@ -164,19 +273,16 @@ impl Default for SimpleHandler {
 #[async_trait]
 impl QueryHandler for SimpleHandler {
     async fn handle_query(&self, query: &ParsedQuery) -> DnsResponse {
-        // Record the chunk as received
         let mut acked = self.acked.write();
         acked
             .entry(query.session_id)
             .or_insert_with(std::collections::HashSet::new)
             .insert(query.sequence);
 
-        // Return ACK
         DnsResponse::ack()
     }
 
     async fn handle_init(&self, session_id: SessionId, _file_hash: &str) -> DnsResponse {
-        // Initialize session tracking
         let mut acked = self.acked.write();
         acked.insert(session_id, std::collections::HashSet::new());
 
@@ -218,4 +324,3 @@ mod tests {
         assert_eq!(acked, vec![0]);
     }
 }
-

@@ -36,20 +36,14 @@ impl DnsQuery {
         // Encode the chunk data
         let payload = encoder.encode_chunk(&chunk.data)?;
 
-        // Build the QNAME: payload.seq-XXXXXX.session.<domain>
+        // Build the QNAME: payload_labels.seq-XXXXXX.session.<domain>
         let seq_label = format!("seq-{:06x}", chunk.id.as_u32());
         let session_label = session_id.to_hex();
 
-        // Check label lengths
-        if payload.len() > MAX_LABEL_LENGTH {
-            return Err(GhostQueryError::EncodingError(format!(
-                "Payload label too long: {} > {}",
-                payload.len(),
-                MAX_LABEL_LENGTH
-            )));
-        }
+        // Split payload into labels of max 63 chars each
+        let payload_labels = Self::split_into_labels(&payload, MAX_LABEL_LENGTH);
 
-        let qname = format!("{}.{}.{}.{}", payload, seq_label, session_label, domain);
+        let qname = format!("{}.{}.{}.{}", payload_labels, seq_label, session_label, domain);
 
         Ok(Self {
             qname,
@@ -58,6 +52,28 @@ impl DnsQuery {
             chunk_id: chunk.id,
             is_final: chunk.is_final,
         })
+    }
+
+    /// Split a string into multiple DNS labels of max_len each
+    fn split_into_labels(s: &str, max_len: usize) -> String {
+        if s.len() <= max_len {
+            return s.to_string();
+        }
+
+        let mut labels = Vec::new();
+        let mut remaining = s;
+        
+        while !remaining.is_empty() {
+            let (label, rest) = if remaining.len() > max_len {
+                remaining.split_at(max_len)
+            } else {
+                (remaining, "")
+            };
+            labels.push(label);
+            remaining = rest;
+        }
+
+        labels.join(".")
     }
 
     /// Create a session initialization query
@@ -70,7 +86,7 @@ impl DnsQuery {
 
         Self {
             qname,
-            record_type: DnsRecordType::TXT,
+            record_type: DnsRecordType::A, // Use A record for consistent handling
             session_id,
             chunk_id: ChunkId::new(0),
             is_final: false,
@@ -83,7 +99,7 @@ impl DnsQuery {
 
         Self {
             qname,
-            record_type: DnsRecordType::TXT,
+            record_type: DnsRecordType::A, // Use A record for consistent handling
             session_id,
             chunk_id: ChunkId::new(u32::MAX),
             is_final: true,
@@ -171,28 +187,35 @@ impl ParsedQuery {
             });
         }
 
-        // Normal data query: payload.seq-XXXXXX.session
-        if parts.len() < 3 {
+        // Normal data query: payload_labels.seq-XXXXXX.session
+        // Find the seq- label to determine where payload ends
+        let seq_idx = parts.iter().position(|p| p.starts_with("seq-"));
+        
+        if seq_idx.is_none() || parts.len() < 3 {
             return Err(GhostQueryError::InvalidDomainFormat(
-                "Not enough labels for data query".to_string(),
+                "Not enough labels for data query or missing seq- label".to_string(),
             ));
         }
 
-        let payload = parts[0].to_string();
+        let seq_idx = seq_idx.unwrap();
+        
+        // Payload is all parts before seq-
+        let payload = parts[..seq_idx].join("");
 
         // Parse sequence number
-        let seq_part = parts[1];
-        if !seq_part.starts_with("seq-") {
-            return Err(GhostQueryError::InvalidDomainFormat(
-                "Invalid sequence label".to_string(),
-            ));
-        }
+        let seq_part = parts[seq_idx];
         let sequence = u32::from_str_radix(&seq_part[4..], 16).map_err(|_| {
             GhostQueryError::InvalidDomainFormat("Invalid sequence number".to_string())
         })?;
 
-        // Parse session ID
-        let session_id = SessionId::from_hex(parts[2])
+        // Session ID is after seq-
+        if seq_idx + 1 >= parts.len() {
+            return Err(GhostQueryError::InvalidDomainFormat(
+                "Missing session ID".to_string(),
+            ));
+        }
+        
+        let session_id = SessionId::from_hex(parts[seq_idx + 1])
             .map_err(|_| GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string()))?;
 
         Ok(Self {

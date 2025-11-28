@@ -48,16 +48,19 @@ pub const ICMP_MAGIC: [u8; 4] = [0x47, 0x51, 0x50, 0x21]; // "GQP!"
 /// A record base for command encoding (127.0.0.X)
 pub const COMMAND_IP_BASE: [u8; 3] = [127, 0, 0];
 
-/// Special A record for dirty bit / retransmit request
-pub const DIRTY_BIT_IP: [u8; 4] = [127, 0, 0, 2];
+/// Special A record for acknowledgment (Command::Ack = 0)
+pub const ACK_IP: [u8; 4] = [127, 0, 0, 0];
 
-/// Special A record for acknowledgment
-pub const ACK_IP: [u8; 4] = [127, 0, 0, 1];
+/// Special A record for dirty bit / retransmit request (Command::Retransmit = 1)
+pub const DIRTY_BIT_IP: [u8; 4] = [127, 0, 0, 1];
 
-/// Special A record for session complete
+/// Special A record for session acknowledgment (Command::SessionAck = 4)
+pub const SESSION_ACK_IP: [u8; 4] = [127, 0, 0, 4];
+
+/// Special A record for session complete (Command::Complete = 5)
 pub const COMPLETE_IP: [u8; 4] = [127, 0, 0, 5];
 
-/// Special A record for error
+/// Special A record for error (Command::Error = 6)
 pub const ERROR_IP: [u8; 4] = [127, 0, 0, 6];
 
 /// Encryption key size (AES-256)
