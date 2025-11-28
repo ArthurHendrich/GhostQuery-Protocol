@@ -62,7 +62,11 @@ impl DnsQuery {
 
     /// Create a session initialization query
     pub fn session_init(session_id: SessionId, file_hash: &str, domain: &str) -> Self {
-        let qname = format!("init.{}.{}.{}", file_hash, session_id.to_hex(), domain);
+        // Split hash into two labels (max 63 chars each, hash is 64 chars)
+        let hash_part1 = &file_hash[..32.min(file_hash.len())];
+        let hash_part2 = if file_hash.len() > 32 { &file_hash[32..] } else { "" };
+        
+        let qname = format!("init.{}.{}.{}.{}", hash_part1, hash_part2, session_id.to_hex(), domain);
 
         Self {
             qname,
@@ -129,18 +133,22 @@ impl ParsedQuery {
 
         // Check for special queries
         if parts[0] == "init" {
-            // init.hash.session
-            if parts.len() < 3 {
+            // init.hash1.hash2.session (hash split into two 32-char labels)
+            if parts.len() < 4 {
                 return Err(GhostQueryError::InvalidDomainFormat(
                     "Invalid init query".to_string(),
                 ));
             }
-            let session_id = SessionId::from_hex(parts[2]).map_err(|_| {
+            // Session ID is in parts[3] (after hash1, hash2)
+            let session_id = SessionId::from_hex(parts[3]).map_err(|_| {
                 GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string())
             })?;
 
+            // Reconstruct full hash from two parts
+            let full_hash = format!("{}{}", parts[1], parts[2]);
+
             return Ok(Self {
-                payload: parts[1].to_string(),
+                payload: full_hash,
                 sequence: 0,
                 session_id,
                 is_init: true,
