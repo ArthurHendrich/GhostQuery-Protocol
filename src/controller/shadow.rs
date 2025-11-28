@@ -225,6 +225,24 @@ impl ShadowMemory {
         shadow.save_to_file(path)
     }
 
+    /// Force save session (even if not complete) - returns bytes written
+    pub fn force_save_session<P: AsRef<Path>>(
+        &self,
+        session_id: &SessionId,
+        path: P,
+    ) -> Result<usize> {
+        let sessions = self.sessions.read();
+        let shadow = sessions
+            .get(session_id)
+            .ok_or_else(|| GhostQueryError::SessionNotFound(session_id.to_string()))?;
+
+        let data = shadow.reassembler.get_received_data();
+        std::fs::write(&path, &data)
+            .map_err(|e| GhostQueryError::FileWriteError(e.to_string()))?;
+        
+        Ok(data.len())
+    }
+
     /// Remove a session
     pub fn remove_session(&self, session_id: &SessionId) {
         self.sessions.write().remove(session_id);

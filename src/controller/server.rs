@@ -165,29 +165,46 @@ impl ControllerServer {
 
     /// Handle session completion
     fn handle_done(&self, session_id: SessionId) -> DnsResponse {
-        if self.shadow.is_session_complete(&session_id) {
-            // Save file if output dir is configured
-            if let Some(ref output_dir) = self.config.output_dir {
-                let output_path = output_dir.join(format!("{}.bin", session_id));
-                if let Err(e) = self.shadow.save_session(&session_id, &output_path) {
-                    tracing::error!("Failed to save session {}: {}", session_id, e);
-                } else {
-                    tracing::info!("Session {} saved to {:?}", session_id, output_path);
+        // Get session stats
+        let stats = self.shadow.session_stats(&session_id);
+        
+        if let Some(stats) = stats {
+            // If we received at least 1 chunk, try to save
+            if stats.received_chunks > 0 {
+                tracing::info!(
+                    "Session {} done: received {} chunks",
+                    session_id,
+                    stats.received_chunks
+                );
+                
+                // Save file if output dir is configured
+                if let Some(ref output_dir) = self.config.output_dir {
+                    let output_path = output_dir.join(format!("{}.bin", session_id));
+                    match self.shadow.force_save_session(&session_id, &output_path) {
+                        Ok(bytes) => {
+                            tracing::info!(
+                                "Session {} saved {} bytes to {:?}",
+                                session_id,
+                                bytes,
+                                output_path
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to save session {}: {}", session_id, e);
+                        }
+                    }
                 }
+
+                return DnsResponse::complete();
             }
-
-            DnsResponse::complete()
-        } else {
-            // Session not complete, return missing chunks
-            let stats = self.shadow.session_stats(&session_id);
-            tracing::warn!(
-                "Session {} completion requested but only {:.1}% complete",
-                session_id,
-                stats.map(|s| s.completion_pct).unwrap_or(0.0)
-            );
-
-            DnsResponse::nxdomain()
         }
+        
+        // No chunks received
+        tracing::warn!(
+            "Session {} completion requested but no chunks received",
+            session_id
+        );
+        DnsResponse::nxdomain()
     }
 
     /// Handle a data chunk
@@ -197,8 +214,11 @@ impl ControllerServer {
         sequence: u32,
         payload: &str,
     ) -> DnsResponse {
+        tracing::debug!("handle_chunk: session={} seq={} payload_len={}", session_id, sequence, payload.len());
+        
         // Check if we need to initialize the session
         if !self.shadow.active_sessions().contains(&session_id) {
+            tracing::debug!("Session {} not in shadow, checking pending_inits", session_id);
             if let Some(pending) = self.pending_inits.write().remove(&session_id) {
                 // Initialize session with estimated total chunks
                 // In practice, the first chunk might contain this info
@@ -212,10 +232,12 @@ impl ControllerServer {
                     estimated_chunks as u64 * 32,
                 );
 
+                tracing::debug!("Initializing shadow session {}", session_id);
                 if let Err(e) = self.shadow.init_session(metadata) {
                     tracing::error!("Failed to init session {}: {}", session_id, e);
                     return DnsResponse::nxdomain();
                 }
+                tracing::info!("Shadow session {} created", session_id);
             } else {
                 // Unknown session
                 tracing::warn!("Chunk for unknown session: {}", session_id);
@@ -224,9 +246,10 @@ impl ControllerServer {
         }
 
         // Receive the chunk
+        tracing::debug!("Receiving chunk into shadow memory");
         match self.shadow.receive_chunk(session_id, sequence, payload) {
             Ok(ChunkReceiveResult::Ack) => {
-                tracing::debug!("Session {} chunk {} acked", session_id, sequence);
+                tracing::info!("Session {} chunk {} stored and acked", session_id, sequence);
                 DnsResponse::ack()
             }
             Ok(ChunkReceiveResult::Retransmit(missing)) => {

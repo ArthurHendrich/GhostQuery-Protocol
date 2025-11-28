@@ -159,7 +159,7 @@ impl DnsServer {
             tracing::info!("Session done: {}", parsed.session_id);
             handler.handle_done(parsed.session_id).await
         } else {
-            tracing::debug!("Chunk {}: session {}", parsed.sequence, parsed.session_id);
+            tracing::info!("Chunk seq={} session={} payload_len={}", parsed.sequence, parsed.session_id, parsed.payload.len());
             handler.handle_query(&parsed).await
         };
 

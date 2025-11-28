@@ -318,6 +318,17 @@ impl ChunkReassembler {
 
         Ok(data)
     }
+
+    /// Get received data without verification (for partial saves)
+    pub fn get_received_data(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        for chunk in &self.chunks {
+            if let Some(chunk_data) = chunk {
+                data.extend_from_slice(chunk_data);
+            }
+        }
+        data
+    }
 }
 
 #[cfg(test)]
