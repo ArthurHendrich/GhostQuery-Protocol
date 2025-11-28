@@ -9,13 +9,12 @@ use std::path::Path;
 use parking_lot::RwLock;
 
 use crate::common::error::{GhostQueryError, Result};
-use crate::common::types::{ChunkId, FileHash, SessionId, SessionMetadata};
+use crate::common::types::{ChunkId, SessionId, SessionMetadata};
 use crate::crypto::cipher::AesGcmCipher;
-use crate::crypto::hash::{verify_hash, Hasher};
 use crate::crypto::keys::KeyManager;
 use crate::encoding::GhostEncoder;
 use crate::protocol::chunker::ChunkReassembler;
-use crate::protocol::coherence::{ChunkState, CoherenceProtocol};
+use crate::protocol::coherence::CoherenceProtocol;
 
 /// Shadow memory for a single session
 pub struct SessionShadow {

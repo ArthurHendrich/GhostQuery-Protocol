@@ -125,8 +125,13 @@ impl IcmpServer {
         let mut buf = [0u8; 1500];
 
         while *self.running.read() {
-            match socket.recv(&mut buf) {
+            let mut recv_buf = [std::mem::MaybeUninit::new(0u8); 1500];
+            match socket.recv(&mut recv_buf) {
                 Ok(len) if len > 8 => {
+                    // Copy to initialized buffer
+                    for i in 0..len.min(1500) {
+                        buf[i] = unsafe { recv_buf[i].assume_init() };
+                    }
                     let payload = &buf[8..len];
 
                     if let Some(packet) = IcmpPacket::from_bytes(payload) {

@@ -28,7 +28,7 @@ impl KeyManager {
 
     /// Create from a hex-encoded key string
     pub fn from_hex(hex_key: &str) -> Result<Self> {
-        let bytes = hex::decode(hex_key).map_err(|e| {
+        let bytes = hex::decode(hex_key).map_err(|_e| {
             GhostQueryError::InvalidKeyLength {
                 expected: ENCRYPTION_KEY_SIZE,
                 actual: 0,

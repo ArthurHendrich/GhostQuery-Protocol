@@ -9,19 +9,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::common::constants::{DEFAULT_CHUNK_SIZE, DEFAULT_SLEEP_DURATION};
 use crate::common::error::{GhostQueryError, Result};
 use crate::common::types::{ChunkId, Command, DnsRecordType, SessionId};
-use crate::crypto::cipher::AesGcmCipher;
 use crate::crypto::keys::KeyManager;
 use crate::encoding::GhostEncoder;
 use crate::protocol::chunker::{ChunkedFile, FileChunker};
 use crate::protocol::window::WindowController;
 use crate::session::buffer::ChunkBuffer;
-use crate::session::state::{SessionState, SessionStateMachine};
+use crate::session::state::SessionStateMachine;
 use crate::transport::dns::{DnsClient, DnsQuery, DnsResponse};
 
 /// Configuration for the implant

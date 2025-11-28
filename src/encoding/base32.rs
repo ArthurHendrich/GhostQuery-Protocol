@@ -34,9 +34,9 @@ impl Default for Base32Encoder {
 impl Encoder for Base32Encoder {
     fn encode(&self, data: &[u8]) -> Result<String> {
         let encoded = if self.padding {
-            base32::encode(base32::Alphabet::Rfc4648 { padding: true }, data)
+            base32::encode(base32::Alphabet::RFC4648 { padding: true }, data)
         } else {
-            base32::encode(base32::Alphabet::Rfc4648 { padding: false }, data)
+            base32::encode(base32::Alphabet::RFC4648 { padding: false }, data)
         };
 
         // Convert to lowercase for DNS compatibility
@@ -47,7 +47,7 @@ impl Encoder for Base32Encoder {
         // Base32 decode is case-insensitive
         let uppercase = encoded.to_uppercase();
 
-        base32::decode(base32::Alphabet::Rfc4648 { padding: self.padding }, &uppercase).ok_or_else(
+        base32::decode(base32::Alphabet::RFC4648 { padding: self.padding }, &uppercase).ok_or_else(
             || {
                 GhostQueryError::DecodingError(format!(
                     "Invalid base32 encoding: {}",

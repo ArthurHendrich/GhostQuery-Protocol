@@ -9,7 +9,7 @@ use tokio::net::UdpSocket;
 
 use crate::common::constants::{DEFAULT_TTL, DNS_SERVER_PORT};
 use crate::common::error::{GhostQueryError, Result};
-use crate::common::types::{ChunkId, SessionId};
+use crate::common::types::SessionId;
 use crate::transport::dns::query::ParsedQuery;
 use crate::transport::dns::response::DnsResponse;
 

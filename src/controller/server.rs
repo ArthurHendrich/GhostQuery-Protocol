@@ -9,8 +9,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 
 use crate::common::constants::DNS_SERVER_PORT;
-use crate::common::error::{GhostQueryError, Result};
-use crate::common::types::{ChunkId, FileHash, SessionId, SessionMetadata};
+use crate::common::types::{FileHash, SessionId, SessionMetadata};
 use crate::controller::shadow::{ChunkReceiveResult, ShadowMemory, ShadowStats};
 use crate::crypto::keys::KeyManager;
 use crate::transport::dns::query::ParsedQuery;

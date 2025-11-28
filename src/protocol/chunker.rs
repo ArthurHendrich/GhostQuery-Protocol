@@ -5,7 +5,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::common::constants::{DEFAULT_CHUNK_SIZE, FILE_BUFFER_SIZE, MAX_FILE_SIZE};
+use crate::common::constants::{DEFAULT_CHUNK_SIZE, MAX_FILE_SIZE};
 use crate::common::error::{GhostQueryError, Result};
 use crate::common::types::{Chunk, ChunkId, FileHash};
 use crate::crypto::cipher::AesGcmCipher;
