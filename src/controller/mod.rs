@@ -10,6 +10,6 @@
 pub mod server;
 pub mod shadow;
 
-pub use server::ControllerServer;
-pub use shadow::ShadowMemory;
+pub use server::{ControllerConfig, ControllerServer, ControllerHandler};
+pub use shadow::{ShadowMemory, ShadowStats, SessionShadow, ChunkReceiveResult};
 

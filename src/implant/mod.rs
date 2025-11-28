@@ -9,5 +9,5 @@
 
 pub mod client;
 
-pub use client::ImplantClient;
+pub use client::{ImplantClient, ImplantConfig, ImplantState, ImplantStats};
 
