@@ -77,12 +77,15 @@ impl DnsQuery {
     }
 
     /// Create a session initialization query
-    pub fn session_init(session_id: SessionId, file_hash: &str, domain: &str) -> Self {
+    /// Format: init.total_chunks_hex.hash1.hash2.session.domain
+    pub fn session_init(session_id: SessionId, file_hash: &str, total_chunks: u32, domain: &str) -> Self {
+        // Encode total_chunks as hex (8 chars for u32)
+        let chunks_hex = format!("{:08x}", total_chunks);
         // Split hash into two labels (max 63 chars each, hash is 64 chars)
         let hash_part1 = &file_hash[..32.min(file_hash.len())];
         let hash_part2 = if file_hash.len() > 32 { &file_hash[32..] } else { "" };
         
-        let qname = format!("init.{}.{}.{}.{}", hash_part1, hash_part2, session_id.to_hex(), domain);
+        let qname = format!("init.{}.{}.{}.{}.{}", chunks_hex, hash_part1, hash_part2, session_id.to_hex(), domain);
 
         Self {
             qname,
@@ -126,6 +129,8 @@ pub struct ParsedQuery {
     pub session_id: SessionId,
     pub is_init: bool,
     pub is_done: bool,
+    /// Total chunks (only set for init queries)
+    pub total_chunks: Option<u32>,
 }
 
 impl ParsedQuery {
@@ -149,19 +154,33 @@ impl ParsedQuery {
 
         // Check for special queries
         if parts[0] == "init" {
-            // init.hash1.hash2.session (hash split into two 32-char labels)
+            // New format: init.total_chunks.hash1.hash2.session
+            // Old format fallback: init.hash1.hash2.session
             if parts.len() < 4 {
                 return Err(GhostQueryError::InvalidDomainFormat(
                     "Invalid init query".to_string(),
                 ));
             }
-            // Session ID is in parts[3] (after hash1, hash2)
-            let session_id = SessionId::from_hex(parts[3]).map_err(|_| {
+            
+            // Check if parts[1] is a total_chunks value (8 hex chars) or hash part
+            let (total_chunks, hash_idx, session_idx) = if parts.len() >= 5 && parts[1].len() == 8 {
+                // New format with total_chunks
+                let chunks = u32::from_str_radix(parts[1], 16).map_err(|_| {
+                    GhostQueryError::InvalidDomainFormat("Invalid total_chunks".to_string())
+                })?;
+                (Some(chunks), 2, 4)
+            } else {
+                // Old format without total_chunks (backwards compatibility)
+                (None, 1, 3)
+            };
+
+            // Session ID is after hash parts
+            let session_id = SessionId::from_hex(parts[session_idx]).map_err(|_| {
                 GhostQueryError::InvalidDomainFormat("Invalid session ID".to_string())
             })?;
 
             // Reconstruct full hash from two parts
-            let full_hash = format!("{}{}", parts[1], parts[2]);
+            let full_hash = format!("{}{}", parts[hash_idx], parts[hash_idx + 1]);
 
             return Ok(Self {
                 payload: full_hash,
@@ -169,6 +188,7 @@ impl ParsedQuery {
                 session_id,
                 is_init: true,
                 is_done: false,
+                total_chunks,
             });
         }
 
@@ -184,6 +204,7 @@ impl ParsedQuery {
                 session_id,
                 is_init: false,
                 is_done: true,
+                total_chunks: None,
             });
         }
 
@@ -224,6 +245,7 @@ impl ParsedQuery {
             session_id,
             is_init: false,
             is_done: false,
+            total_chunks: None,
         })
     }
 }
@@ -258,8 +280,8 @@ impl QueryBuilder {
     }
 
     /// Build an init query
-    pub fn build_init_query(&self, file_hash: &str) -> DnsQuery {
-        DnsQuery::session_init(self.session_id, file_hash, &self.domain)
+    pub fn build_init_query(&self, file_hash: &str, total_chunks: u32) -> DnsQuery {
+        DnsQuery::session_init(self.session_id, file_hash, total_chunks, &self.domain)
     }
 
     /// Build a completion query
@@ -298,14 +320,28 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_init_query() {
+    fn test_parse_init_query_new_format() {
+        // New format: init.total_chunks.hash1.hash2.session.domain
         let domain = "example.com";
-        let qname = "init.abcdef123456.0102030405060708.example.com";
+        let qname = "init.000003e8.abcdef12345678901234567890123456.12345678901234567890123456789012.0102030405060708.example.com";
 
         let parsed = ParsedQuery::parse(qname, domain).unwrap();
 
         assert!(parsed.is_init);
-        assert_eq!(parsed.payload, "abcdef123456");
+        assert_eq!(parsed.total_chunks, Some(1000)); // 0x3e8 = 1000
+        assert_eq!(parsed.payload.len(), 64); // Full hash (32+32)
+    }
+
+    #[test]
+    fn test_parse_init_query_old_format() {
+        // Old format for backwards compatibility: init.hash1.hash2.session.domain
+        let domain = "example.com";
+        let qname = "init.abcdef12345678901234567890123456.12345678901234567890123456789012.0102030405060708.example.com";
+
+        let parsed = ParsedQuery::parse(qname, domain).unwrap();
+
+        assert!(parsed.is_init);
+        assert_eq!(parsed.total_chunks, None); // Old format doesn't have total_chunks
     }
 
     #[test]

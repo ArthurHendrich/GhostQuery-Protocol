@@ -23,8 +23,8 @@ pub trait QueryHandler: Send + Sync {
     /// Handle a parsed query and return a response
     async fn handle_query(&self, query: &ParsedQuery) -> DnsResponse;
 
-    /// Handle session initialization
-    async fn handle_init(&self, session_id: SessionId, file_hash: &str) -> DnsResponse;
+    /// Handle session initialization with total_chunks
+    async fn handle_init(&self, session_id: SessionId, file_hash: &str, total_chunks: Option<u32>) -> DnsResponse;
 
     /// Handle session completion
     async fn handle_done(&self, session_id: SessionId) -> DnsResponse;
@@ -153,8 +153,8 @@ impl DnsServer {
 
         // Handle the query
         let dns_response = if parsed.is_init {
-            tracing::info!("Session init: {}", parsed.session_id);
-            handler.handle_init(parsed.session_id, &parsed.payload).await
+            tracing::info!("Session init: {} with total_chunks={:?}", parsed.session_id, parsed.total_chunks);
+            handler.handle_init(parsed.session_id, &parsed.payload, parsed.total_chunks).await
         } else if parsed.is_done {
             tracing::info!("Session done: {}", parsed.session_id);
             handler.handle_done(parsed.session_id).await
@@ -282,7 +282,7 @@ impl QueryHandler for SimpleHandler {
         DnsResponse::ack()
     }
 
-    async fn handle_init(&self, session_id: SessionId, _file_hash: &str) -> DnsResponse {
+    async fn handle_init(&self, session_id: SessionId, _file_hash: &str, _total_chunks: Option<u32>) -> DnsResponse {
         let mut acked = self.acked.write();
         acked.insert(session_id, std::collections::HashSet::new());
 
@@ -315,6 +315,7 @@ mod tests {
             session_id,
             is_init: false,
             is_done: false,
+            total_chunks: None,
         };
 
         let response = handler.handle_query(&query).await;

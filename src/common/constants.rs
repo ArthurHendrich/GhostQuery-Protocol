@@ -1,7 +1,9 @@
 //! Protocol constants and configuration values.
 
 /// Default chunk size in bytes (optimized for DNS subdomain encoding)
-pub const DEFAULT_CHUNK_SIZE: usize = 32;
+/// 64 bytes allows for efficient base32 encoding while staying within DNS label limits
+/// This reduces the number of queries by 2x compared to 32 bytes
+pub const DEFAULT_CHUNK_SIZE: usize = 64;
 
 /// Maximum DNS label length (RFC 1035)
 pub const MAX_LABEL_LENGTH: usize = 63;
@@ -10,7 +12,8 @@ pub const MAX_LABEL_LENGTH: usize = 63;
 pub const MAX_QNAME_LENGTH: usize = 253;
 
 /// Default sliding window size (number of outstanding chunks)
-pub const DEFAULT_WINDOW_SIZE: usize = 8;
+/// Larger window allows for more parallelism while maintaining ordering
+pub const DEFAULT_WINDOW_SIZE: usize = 16;
 
 /// Default rolling window size for coherence protocol
 pub const DEFAULT_ROLLING_SIZE: usize = 4;

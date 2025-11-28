@@ -142,6 +142,7 @@ pub fn derive_key_from_password(password: &[u8], salt: &[u8]) -> [u8; ENCRYPTION
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::Cipher;
 
     #[test]
     fn test_key_manager_creation() {

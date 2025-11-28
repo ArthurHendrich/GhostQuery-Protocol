@@ -292,6 +292,7 @@ pub struct ShadowStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::types::FileHash;
 
     #[test]
     fn test_shadow_memory_creation() {

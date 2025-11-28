@@ -59,7 +59,7 @@ pub struct ControllerServer {
 #[derive(Debug, Clone)]
 struct PendingInit {
     file_hash: FileHash,
-    total_chunks: Option<u32>,
+    total_chunks: u32,
 }
 
 impl ControllerServer {
@@ -141,19 +141,25 @@ impl ControllerServer {
     }
 
     /// Handle session initialization
-    fn handle_init(&self, session_id: SessionId, file_hash_hex: &str) -> DnsResponse {
+    fn handle_init(&self, session_id: SessionId, file_hash_hex: &str, total_chunks: Option<u32>) -> DnsResponse {
         match FileHash::from_hex(file_hash_hex) {
             Ok(file_hash) => {
+                // Use provided total_chunks or a reasonable default for backwards compatibility
+                let chunks = total_chunks.unwrap_or_else(|| {
+                    tracing::warn!("No total_chunks in init query, using default 100000");
+                    100000 // Large default for backwards compatibility
+                });
+
                 // Store pending init
                 self.pending_inits.write().insert(
                     session_id,
                     PendingInit {
                         file_hash,
-                        total_chunks: None,
+                        total_chunks: chunks,
                     },
                 );
 
-                tracing::info!("Session {} initialized", session_id);
+                tracing::info!("Session {} initialized with {} chunks", session_id, chunks);
                 DnsResponse::ack()
             }
             Err(_) => {
@@ -220,24 +226,23 @@ impl ControllerServer {
         if !self.shadow.active_sessions().contains(&session_id) {
             tracing::debug!("Session {} not in shadow, checking pending_inits", session_id);
             if let Some(pending) = self.pending_inits.write().remove(&session_id) {
-                // Initialize session with estimated total chunks
-                // In practice, the first chunk might contain this info
-                let estimated_chunks = 1000; // Will be updated as chunks arrive
+                // Use the total_chunks from the init query
+                let total_chunks = pending.total_chunks;
 
                 let metadata = SessionMetadata::new(
                     session_id,
                     pending.file_hash,
-                    estimated_chunks,
+                    total_chunks,
                     32, // Default chunk size
-                    estimated_chunks as u64 * 32,
+                    total_chunks as u64 * 32,
                 );
 
-                tracing::debug!("Initializing shadow session {}", session_id);
+                tracing::debug!("Initializing shadow session {} with {} chunks", session_id, total_chunks);
                 if let Err(e) = self.shadow.init_session(metadata) {
                     tracing::error!("Failed to init session {}: {}", session_id, e);
                     return DnsResponse::nxdomain();
                 }
-                tracing::info!("Shadow session {} created", session_id);
+                tracing::info!("Shadow session {} created with {} total chunks", session_id, total_chunks);
             } else {
                 // Unknown session
                 tracing::warn!("Chunk for unknown session: {}", session_id);
@@ -285,7 +290,7 @@ pub struct ControllerHandler {
 impl QueryHandler for ControllerHandler {
     async fn handle_query(&self, query: &ParsedQuery) -> DnsResponse {
         if query.is_init {
-            self.server.handle_init(query.session_id, &query.payload)
+            self.server.handle_init(query.session_id, &query.payload, query.total_chunks)
         } else if query.is_done {
             self.server.handle_done(query.session_id)
         } else {
@@ -294,8 +299,8 @@ impl QueryHandler for ControllerHandler {
         }
     }
 
-    async fn handle_init(&self, session_id: SessionId, file_hash: &str) -> DnsResponse {
-        self.server.handle_init(session_id, file_hash)
+    async fn handle_init(&self, session_id: SessionId, file_hash: &str, total_chunks: Option<u32>) -> DnsResponse {
+        self.server.handle_init(session_id, file_hash, total_chunks)
     }
 
     async fn handle_done(&self, session_id: SessionId) -> DnsResponse {
@@ -329,7 +334,7 @@ mod tests {
         let session_id = SessionId::new();
         let file_hash = "0".repeat(64); // 32 bytes in hex
 
-        let response = server.handle_init(session_id, &file_hash);
+        let response = server.handle_init(session_id, &file_hash, Some(100));
         assert!(response.is_ack());
     }
 }

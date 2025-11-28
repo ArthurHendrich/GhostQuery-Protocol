@@ -27,16 +27,16 @@ struct Args {
     #[arg(short, long)]
     server: Option<String>,
 
-    /// Chunk size in bytes
-    #[arg(long, default_value = "32")]
+    /// Chunk size in bytes (larger = fewer queries, 64-90 recommended)
+    #[arg(long, default_value = "64")]
     chunk_size: usize,
 
-    /// Window size (outstanding chunks)
-    #[arg(long, default_value = "8")]
+    /// Window size (outstanding chunks, higher = more parallel)
+    #[arg(long, default_value = "16")]
     window_size: usize,
 
-    /// Delay between queries in milliseconds
-    #[arg(long, default_value = "100")]
+    /// Delay between queries in milliseconds (lower = faster but less stealthy)
+    #[arg(long, default_value = "50")]
     delay: u64,
 
     /// Master key (hex encoded, 64 chars = 32 bytes)
