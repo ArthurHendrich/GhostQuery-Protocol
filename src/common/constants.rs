@@ -1,9 +1,9 @@
 //! Protocol constants and configuration values.
 
 /// Default chunk size in bytes (optimized for DNS subdomain encoding)
-/// 64 bytes allows for efficient base32 encoding while staying within DNS label limits
-/// This reduces the number of queries by 2x compared to 32 bytes
-pub const DEFAULT_CHUNK_SIZE: usize = 64;
+/// 90 bytes is the maximum that fits within DNS QNAME limits after base32 encoding
+/// and AES-GCM encryption overhead. This reduces queries by 3x vs 32 bytes.
+pub const DEFAULT_CHUNK_SIZE: usize = 90;
 
 /// Maximum DNS label length (RFC 1035)
 pub const MAX_LABEL_LENGTH: usize = 63;
